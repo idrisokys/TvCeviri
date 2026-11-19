@@ -32,6 +32,10 @@ import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import org.json.JSONArray
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 class CaptureService : Service() {
 
@@ -119,8 +123,12 @@ class CaptureService : Service() {
         t.downloadModelIfNeeded()
             .addOnSuccessListener { startCapture() }
             .addOnFailureListener {
-                toast("Model indirilemedi, internet bağlantısını kontrol et")
-                stopSelf()
+                if (Prefs.online(this)) {
+                    startCapture() // Offline model yok ama online çeviri çalışabilir
+                } else {
+                    toast("Model indirilemedi, internet bağlantısını kontrol et")
+                    stopSelf()
+                }
             }
     }
 
@@ -204,10 +212,52 @@ class CaptureService : Service() {
         if (text == lastText) { restore(); next(); return }
         lastText = text
 
+        val cleaned = clean(text)
+        if (Prefs.online(this)) {
+            bg?.post {
+                val r = translateOnline(cleaned)
+                main.post { if (r != null) { show(r); next() } else translateOffline(cleaned) }
+            }
+        } else {
+            translateOffline(cleaned)
+        }
+    }
+
+    private fun translateOffline(text: String) {
         translator?.translate(text)
             ?.addOnSuccessListener { show(it); next() }
             ?.addOnFailureListener { restore(); next() }
+            ?: run { restore(); next() }
     }
+
+    /** Google Translate (anahtarsız uç nokta). Hata olursa null döner. */
+    private fun translateOnline(text: String): String? {
+        return try {
+            val url = URL(
+                "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=tr&dt=t&q=" +
+                    URLEncoder.encode(text, "UTF-8")
+            )
+            val c = url.openConnection() as HttpURLConnection
+            c.connectTimeout = 3000
+            c.readTimeout = 3000
+            c.setRequestProperty("User-Agent", "Mozilla/5.0")
+            val body = c.inputStream.bufferedReader().use { it.readText() }
+            val arr = JSONArray(body).getJSONArray(0)
+            val sb = StringBuilder()
+            for (i in 0 until arr.length()) sb.append(arr.getJSONArray(i).optString(0, ""))
+            sb.toString().trim().ifEmpty { null }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** OCR'ın sık yaptığı hataları temizle; çeviriye temiz metin gitsin. */
+    private fun clean(s: String): String = s
+        .replace(Regex("[♪♫♬#*_]+"), " ")
+        .replace("|", "I")
+        .replace(Regex("\\bl(?=['’]\\w)"), "I")   // l'm -> I'm
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     private fun show(t: String) {
         val w = wm ?: return

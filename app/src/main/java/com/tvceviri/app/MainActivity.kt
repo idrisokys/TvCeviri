@@ -20,6 +20,7 @@ class MainActivity : Activity() {
     private lateinit var btnRegion: Button
     private lateinit var btnText: Button
     private lateinit var btnMode: Button
+    private lateinit var btnEngine: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +63,9 @@ class MainActivity : Activity() {
         btnMode = btn("") {
             Prefs.setCover(this, !Prefs.cover(this)); refresh()
         }
+        btnEngine = btn("") {
+            Prefs.setOnline(this, !Prefs.online(this)); refresh()
+        }
 
         root.addView(TextView(this).apply {
             text = "Önce 'Başlat'a bas, izinleri ver, sonra Kodi/Nuvio'ya geç. " +
@@ -76,11 +80,19 @@ class MainActivity : Activity() {
 
     private fun refresh() {
         btnRegion.text = "Altyazı bölgesi: ekranın alt %${Prefs.region(this)}'i"
+        refreshEngine()
         btnText.text = "Yazı boyutu: ${Prefs.textSp(this)}"
         btnMode.text = if (Prefs.cover(this))
             "Mod: Örtü (altyazıyı kapatır, hafif yanıp sönebilir)"
         else
             "Mod: Üstte göster (İngilizce altyazı altta kalır)"
+    }
+
+    private fun refreshEngine() {
+        btnEngine.text = if (Prefs.online(this))
+            "Çeviri: Online (Google, daha kaliteli) - internet yoksa offline'a düşer"
+        else
+            "Çeviri: Offline (ML Kit, internetsiz ama zayıf)"
     }
 
     private fun start() {
