@@ -7,9 +7,16 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -17,82 +24,155 @@ import androidx.core.content.ContextCompat
 class MainActivity : Activity() {
 
     private val reqCapture = 42
-    private lateinit var btnRegion: Button
-    private lateinit var btnText: Button
+    private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+    private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+
+    private lateinit var root: LinearLayout
+    private lateinit var preview: SubtitleView
+    private lateinit var btnColor: Button
     private lateinit var btnMode: Button
     private lateinit var btnEngine: Button
+
+    private val colors = listOf(
+        "Sarı" to 0xFFFFEB00.toInt(),
+        "Beyaz" to 0xFFFFFFFF.toInt(),
+        "Açık yeşil" to 0xFF76FF03.toInt(),
+        "Camgöbeği" to 0xFF00E5FF.toInt(),
+        "Turuncu" to 0xFFFF9800.toInt(),
+        "Pembe" to 0xFFFF80AB.toInt()
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val root = LinearLayout(this).apply {
+        root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(120, 60, 120, 60)
+            setPadding(120, 40, 120, 60)
+        }
+        val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#121212"))
+            addView(root)
         }
-        root.addView(TextView(this).apply {
-            text = "TV Çeviri (EN → TR)"
-            textSize = 30f
-            setTextColor(Color.WHITE)
-        })
 
-        fun btn(label: String, onClick: (Button) -> Unit): Button {
-            val b = Button(this)
-            b.text = label
-            b.isFocusable = true
-            b.setOnClickListener { onClick(b) }
-            root.addView(b, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = 16 })
-            return b
+        label("TV Çeviri (EN → TR)", 30f, Color.WHITE)
+
+        // Önizleme
+        val box = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#555555")) }
+        preview = SubtitleView(this).apply {
+            maxW = 1100
+            setSubtitle("Örnek altyazı: Merhaba, nasılsın?")
+            update()
         }
+        box.addView(preview, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
+        root.addView(box, LinearLayout.LayoutParams(MATCH, 260).apply { topMargin = 16 })
 
         btn("Başlat") { start() }.requestFocus()
         btn("Durdur") { stopService(Intent(this, CaptureService::class.java)) }
 
-        btnRegion = btn("") {
-            val opts = listOf(20, 25, 30, 35, 40, 50)
-            val next = opts[(opts.indexOf(Prefs.region(this)) + 1) % opts.size]
-            Prefs.setRegion(this, next); refresh()
+        seek("Altyazı bölgesi (ekranın alt %)", 1, 50, 1, { Prefs.region(this) }) { Prefs.setRegion(this, it) }
+        seek("Yazı boyutu", 12, 80, 1, { Prefs.textSp(this) }) { Prefs.setTextSp(this, it) }
+        seek("Kenarlık kalınlığı (%)", 0, 100, 5, { Prefs.outline(this) }) { Prefs.setOutline(this, it) }
+        seek("Yazı saydamlığı (görünürlük %)", 10, 100, 5, { Prefs.opacity(this) }) { Prefs.setOpacity(this, it) }
+
+        btnColor = btn("") {
+            val cur = Prefs.color(this)
+            val i = colors.indexOfFirst { it.second == cur }
+            Prefs.setColor(this, colors[(i + 1) % colors.size].second)
+            refresh()
         }
-        btnText = btn("") {
-            val opts = listOf(20, 24, 28, 32, 36, 40, 44)
-            val next = opts[(opts.indexOf(Prefs.textSp(this)) + 1) % opts.size]
-            Prefs.setTextSp(this, next); refresh()
-        }
-        btnMode = btn("") {
-            Prefs.setCover(this, !Prefs.cover(this)); refresh()
-        }
+        btnMode = btn("") { Prefs.setCover(this, !Prefs.cover(this)); refresh() }
         btnEngine = btn("") {
-            Prefs.setOnline(this, !Prefs.online(this)); refresh()
+            val ids = Prefs.ENGINES.map { it.first }
+            val i = ids.indexOf(Prefs.engine(this))
+            Prefs.setEngine(this, ids[(i + 1) % ids.size])
+            refresh()
         }
 
-        root.addView(TextView(this).apply {
-            text = "Önce 'Başlat'a bas, izinleri ver, sonra Kodi/Nuvio'ya geç. " +
-                "İlk çalıştırmada çeviri modeli indirilir (internet gerekir)."
-            textSize = 16f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, 32, 0, 0)
-        })
-        setContentView(root)
+        label("DeepL API anahtarı (ücretsiz plan yeterli)", 14f, Color.LTGRAY)
+        keyField("DeepL anahtarı", { Prefs.deeplKey(this) }) { Prefs.setDeeplKey(this, it) }
+        label("Gemini API anahtarı (Google AI Studio'dan ücretsiz)", 14f, Color.LTGRAY)
+        keyField("Gemini anahtarı", { Prefs.geminiKey(this) }) { Prefs.setGeminiKey(this, it) }
+        label("Gemini model adı (hata verirse güncel adı yaz)", 14f, Color.LTGRAY)
+        keyField("gemini-3.6-flash", { Prefs.geminiModel(this) }) { Prefs.setGeminiModel(this, it) }
+
+        label(
+            "Önce 'Başlat'a bas, izinleri ver, sonra Kodi/Nuvio'ya geç. " +
+                "Ayarlar bir sonraki altyazıdan itibaren geçerli olur.",
+            15f, Color.LTGRAY
+        )
+
+        setContentView(scroll)
         refresh()
     }
 
+    private fun label(t: String, size: Float, color: Int) {
+        root.addView(TextView(this).apply {
+            text = t; textSize = size; setTextColor(color)
+        }, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 20 })
+    }
+
+    private fun btn(label: String, onClick: () -> Unit): Button {
+        val b = Button(this)
+        b.text = label
+        b.isFocusable = true
+        b.setOnClickListener { onClick() }
+        root.addView(b, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 16 })
+        return b
+    }
+
+    private fun seek(
+        title: String, min: Int, max: Int, step: Int,
+        get: () -> Int, set: (Int) -> Unit
+    ) {
+        val tv = TextView(this).apply { textSize = 16f; setTextColor(Color.WHITE) }
+        tv.text = "$title: ${get()}"
+        root.addView(tv, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = 24 })
+        val sb = SeekBar(this).apply {
+            this.max = (max - min) / step
+            progress = (get() - min) / step
+            keyProgressIncrement = 1
+            isFocusable = true
+        }
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                val v = min + p * step
+                set(v)
+                tv.text = "$title: $v"
+                preview.update()
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
+        root.addView(sb, LinearLayout.LayoutParams(MATCH, WRAP))
+    }
+
+    private fun keyField(hint: String, get: () -> String, set: (String) -> Unit) {
+        val e = EditText(this).apply {
+            this.hint = hint
+            setText(get())
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            isSingleLine = true
+            addTextChangedListener(object : TextWatcher {
+                override fun afterTextChanged(s: Editable?) { set(s?.toString()?.trim() ?: "") }
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            })
+        }
+        root.addView(e, LinearLayout.LayoutParams(MATCH, WRAP))
+    }
+
     private fun refresh() {
-        btnRegion.text = "Altyazı bölgesi: ekranın alt %${Prefs.region(this)}'i"
-        refreshEngine()
-        btnText.text = "Yazı boyutu: ${Prefs.textSp(this)}"
+        val cur = Prefs.color(this)
+        btnColor.text = "Yazı rengi: " + (colors.firstOrNull { it.second == cur }?.first ?: "Özel")
+        btnColor.setTextColor(cur)
         btnMode.text = if (Prefs.cover(this))
             "Mod: Örtü (altyazıyı kapatır, hafif yanıp sönebilir)"
         else
             "Mod: Üstte göster (İngilizce altyazı altta kalır)"
-    }
-
-    private fun refreshEngine() {
-        btnEngine.text = if (Prefs.online(this))
-            "Çeviri: Online (Google, daha kaliteli) - internet yoksa offline'a düşer"
-        else
-            "Çeviri: Offline (ML Kit, internetsiz ama zayıf)"
+        btnEngine.text = "Çeviri motoru: " +
+            (Prefs.ENGINES.firstOrNull { it.first == Prefs.engine(this) }?.second ?: "")
+        preview.update()
     }
 
     private fun start() {

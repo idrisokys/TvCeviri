@@ -7,7 +7,6 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -23,7 +22,6 @@ import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.TextView
 import android.widget.Toast
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
@@ -33,6 +31,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import org.json.JSONArray
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -50,15 +49,20 @@ class CaptureService : Service() {
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     private var wm: WindowManager? = null
-    private var overlay: TextView? = null
+    private var overlay: SubtitleView? = null
+    private var shown = false
 
     @Volatile private var running = false
     private var lastText = ""
+    private var prevCtx = ""
     private var emptyCount = 0
     private var cw = 0
     private var ch = 0
     private var screenW = 0
     private var screenH = 0
+
+    private var msToken: String? = null
+    private var msTokenTime = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -119,12 +123,12 @@ class CaptureService : Service() {
             .build()
         val t = Translation.getClient(opts)
         translator = t
-        toast("Çeviri modeli hazırlanıyor...")
+        toast("Çeviri hazırlanıyor...")
         t.downloadModelIfNeeded()
             .addOnSuccessListener { startCapture() }
             .addOnFailureListener {
-                if (Prefs.online(this)) {
-                    startCapture() // Offline model yok ama online çeviri çalışabilir
+                if (Prefs.engine(this) != "mlkit") {
+                    startCapture() // Offline yedek model yok ama online motorlar çalışabilir
                 } else {
                     toast("Model indirilemedi, internet bağlantısını kontrol et")
                     stopSelf()
@@ -160,9 +164,9 @@ class CaptureService : Service() {
 
     private fun cycle() {
         if (!running) return
-        if (Prefs.cover(this) && overlay?.visibility == View.VISIBLE) {
+        if (Prefs.cover(this) && shown) {
             // Örtü modunda kendi kutumuzu yakalamamak için kısa süre gizle.
-            main.post { overlay?.alpha = 0f }
+            main.post { overlay?.visibility = View.INVISIBLE }
             bg?.postDelayed({ grab() }, 150)
         } else {
             grab()
@@ -171,7 +175,7 @@ class CaptureService : Service() {
 
     private fun next() { if (running) bg?.postDelayed({ cycle() }, 500) }
 
-    private fun restore() { main.post { overlay?.alpha = 1f } }
+    private fun restore() { main.post { if (shown) overlay?.visibility = View.VISIBLE } }
 
     private fun grab() {
         if (!running) return
@@ -204,6 +208,7 @@ class CaptureService : Service() {
         if (text.length < 4 || !text.any { it.isLetter() }) {
             if (++emptyCount >= 2) {
                 lastText = ""
+                shown = false
                 overlay?.visibility = View.GONE
             } else restore()
             next(); return
@@ -213,58 +218,36 @@ class CaptureService : Service() {
         lastText = text
 
         val cleaned = clean(text)
-        if (Prefs.online(this)) {
-            bg?.post {
-                val r = translateOnline(cleaned)
-                main.post { if (r != null) { show(r); next() } else translateOffline(cleaned) }
+        val engine = Prefs.engine(this)
+        bg?.post {
+            var r: String? = when (engine) {
+                "google" -> tGoogle(cleaned)
+                "microsoft" -> tMicrosoft(cleaned)
+                "deepl" -> tDeepl(cleaned)
+                "gemini" -> tGemini(cleaned)
+                else -> null
             }
-        } else {
-            translateOffline(cleaned)
+            // Seçilen motor başarısız olursa Google'a, o da olmazsa ML Kit'e düş.
+            if (r == null && engine != "mlkit" && engine != "google") r = tGoogle(cleaned)
+            if (r != null) prevCtx = cleaned
+            main.post { if (r != null) { show(r); next() } else translateOffline(cleaned) }
         }
     }
 
     private fun translateOffline(text: String) {
         translator?.translate(text)
-            ?.addOnSuccessListener { show(it); next() }
+            ?.addOnSuccessListener { prevCtx = text; show(it); next() }
             ?.addOnFailureListener { restore(); next() }
             ?: run { restore(); next() }
     }
 
-    /** Google Translate (anahtarsız uç nokta). Hata olursa null döner. */
-    private fun translateOnline(text: String): String? {
-        return try {
-            val url = URL(
-                "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=tr&dt=t&q=" +
-                    URLEncoder.encode(text, "UTF-8")
-            )
-            val c = url.openConnection() as HttpURLConnection
-            c.connectTimeout = 3000
-            c.readTimeout = 3000
-            c.setRequestProperty("User-Agent", "Mozilla/5.0")
-            val body = c.inputStream.bufferedReader().use { it.readText() }
-            val arr = JSONArray(body).getJSONArray(0)
-            val sb = StringBuilder()
-            for (i in 0 until arr.length()) sb.append(arr.getJSONArray(i).optString(0, ""))
-            sb.toString().trim().ifEmpty { null }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /** OCR'ın sık yaptığı hataları temizle; çeviriye temiz metin gitsin. */
-    private fun clean(s: String): String = s
-        .replace(Regex("[♪♫♬#*_]+"), " ")
-        .replace("|", "I")
-        .replace(Regex("\\bl(?=['’]\\w)"), "I")   // l'm -> I'm
-        .replace(Regex("\\s+"), " ")
-        .trim()
-
     private fun show(t: String) {
         val w = wm ?: return
         val v = overlay ?: createOverlay().also { overlay = it }
-        v.text = t
-        v.textSize = Prefs.textSp(this).toFloat()
-        v.alpha = 1f
+        v.maxW = (screenW * 0.9f).toInt()
+        v.update()
+        v.setSubtitle(t)
+        shown = true
         v.visibility = View.VISIBLE
         val lp = v.layoutParams as WindowManager.LayoutParams
         lp.y = if (Prefs.cover(this)) (screenH * 0.04f).toInt()
@@ -272,14 +255,8 @@ class CaptureService : Service() {
         w.updateViewLayout(v, lp)
     }
 
-    private fun createOverlay(): TextView {
-        val v = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#D9000000"))
-            gravity = Gravity.CENTER
-            setPadding(32, 12, 32, 12)
-            maxWidth = (screenW * 0.85f).toInt()
-        }
+    private fun createOverlay(): SubtitleView {
+        val v = SubtitleView(this)
         val type = if (Build.VERSION.SDK_INT >= 26)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
@@ -296,6 +273,118 @@ class CaptureService : Service() {
         wm!!.addView(v, lp)
         return v
     }
+
+    // ---- Çeviri motorları (bg thread) ----
+
+    private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+
+    private fun http(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        body: String? = null
+    ): String? = try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 4000
+        c.readTimeout = 7000
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+        if (body != null) {
+            c.requestMethod = "POST"
+            c.doOutput = true
+            c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
+        if (c.responseCode !in 200..299) null
+        else c.inputStream.bufferedReader().use { it.readText() }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun tGoogle(t: String): String? = try {
+        val body = http(
+            "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=tr&dt=t&q=" + enc(t),
+            mapOf("User-Agent" to "Mozilla/5.0")
+        )
+        if (body == null) null else {
+            val arr = JSONArray(body).getJSONArray(0)
+            val sb = StringBuilder()
+            for (i in 0 until arr.length()) sb.append(arr.getJSONArray(i).optString(0, ""))
+            sb.toString().trim().ifEmpty { null }
+        }
+    } catch (e: Exception) { null }
+
+    /** Microsoft Edge'in anahtarsız çeviri uç noktası. */
+    private fun tMicrosoft(t: String): String? = try {
+        if (msToken == null || System.currentTimeMillis() - msTokenTime > 8 * 60_000L) {
+            msToken = http("https://edge.microsoft.com/translate/auth", mapOf("User-Agent" to "Mozilla/5.0"))
+            msTokenTime = System.currentTimeMillis()
+        }
+        val tok = msToken
+        if (tok == null) null else {
+            val reqBody = JSONArray().put(JSONObject().put("Text", t)).toString()
+            val r = http(
+                "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&from=en&to=tr",
+                mapOf("Authorization" to "Bearer $tok", "Content-Type" to "application/json"),
+                reqBody
+            )
+            if (r == null) { msToken = null; null }
+            else JSONArray(r).getJSONObject(0).getJSONArray("translations")
+                .getJSONObject(0).getString("text").trim().ifEmpty { null }
+        }
+    } catch (e: Exception) { null }
+
+    private fun tDeepl(t: String): String? = try {
+        val key = Prefs.deeplKey(this)
+        if (key.isEmpty()) null else {
+            val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
+            val r = http(
+                "https://$host/v2/translate",
+                mapOf(
+                    "Authorization" to "DeepL-Auth-Key $key",
+                    "Content-Type" to "application/x-www-form-urlencoded"
+                ),
+                "text=" + enc(t) + "&source_lang=EN&target_lang=TR"
+            )
+            if (r == null) null
+            else JSONObject(r).getJSONArray("translations").getJSONObject(0)
+                .getString("text").trim().ifEmpty { null }
+        }
+    } catch (e: Exception) { null }
+
+    /** Gemini: önceki repliği bağlam olarak verir, OCR hatalarını düzeltir. */
+    private fun tGemini(t: String): String? = try {
+        val key = Prefs.geminiKey(this)
+        if (key.isEmpty()) null else {
+            val model = Prefs.geminiModel(this).ifEmpty { "gemini-3.6-flash" }
+            val prompt = "Translate the following English movie/TV subtitle into natural, fluent " +
+                "Turkish, the way a good subtitle translator would. The text comes from OCR and may " +
+                "contain small errors; fix obvious ones. Output ONLY the Turkish translation, " +
+                "no quotes, no explanation.\n" +
+                (if (prevCtx.isNotEmpty()) "Previous line (context only, do not translate): $prevCtx\n" else "") +
+                "Subtitle: $t"
+            val reqBody = JSONObject().put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                )
+            ).toString()
+            val r = http(
+                "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent",
+                mapOf("x-goog-api-key" to key, "Content-Type" to "application/json"),
+                reqBody
+            )
+            if (r == null) null
+            else JSONObject(r).getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+                .getString("text").trim().ifEmpty { null }
+        }
+    } catch (e: Exception) { null }
+
+    /** OCR'ın sık yaptığı hataları temizle; çeviriye temiz metin gitsin. */
+    private fun clean(s: String): String = s
+        .replace(Regex("[♪♫♬#*_]+"), " ")
+        .replace("|", "I")
+        .replace(Regex("\\bl(?=['’]\\w)"), "I")   // l'm -> I'm
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     override fun onDestroy() {
         running = false
