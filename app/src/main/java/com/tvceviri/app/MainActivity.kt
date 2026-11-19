@@ -7,12 +7,9 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.text.Editable
-import android.text.TextWatcher
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -74,6 +71,8 @@ class MainActivity : Activity() {
         seek("Kenarlık kalınlığı (%)", 0, 100, 5, { Prefs.outline(this) }) { Prefs.setOutline(this, it) }
         seek("Yazı saydamlığı (görünürlük %)", 10, 100, 5, { Prefs.opacity(this) }) { Prefs.setOpacity(this, it) }
 
+        seek("Çeviri gecikmesi (ms)", 100, 3000, 100, { Prefs.delay(this) }) { Prefs.setDelay(this, it) }
+
         btnColor = btn("") {
             val cur = Prefs.color(this)
             val i = colors.indexOfFirst { it.second == cur }
@@ -87,13 +86,6 @@ class MainActivity : Activity() {
             Prefs.setEngine(this, ids[(i + 1) % ids.size])
             refresh()
         }
-
-        label("DeepL API anahtarı (ücretsiz plan yeterli)", 14f, Color.LTGRAY)
-        keyField("DeepL anahtarı", { Prefs.deeplKey(this) }) { Prefs.setDeeplKey(this, it) }
-        label("Gemini API anahtarı (Google AI Studio'dan ücretsiz)", 14f, Color.LTGRAY)
-        keyField("Gemini anahtarı", { Prefs.geminiKey(this) }) { Prefs.setGeminiKey(this, it) }
-        label("Gemini model adı (hata verirse güncel adı yaz)", 14f, Color.LTGRAY)
-        keyField("gemini-3.6-flash", { Prefs.geminiModel(this) }) { Prefs.setGeminiModel(this, it) }
 
         label(
             "Önce 'Başlat'a bas, izinleri ver, sonra Kodi/Nuvio'ya geç. " +
@@ -144,22 +136,6 @@ class MainActivity : Activity() {
             override fun onStopTrackingTouch(s: SeekBar?) {}
         })
         root.addView(sb, LinearLayout.LayoutParams(MATCH, WRAP))
-    }
-
-    private fun keyField(hint: String, get: () -> String, set: (String) -> Unit) {
-        val e = EditText(this).apply {
-            this.hint = hint
-            setText(get())
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            isSingleLine = true
-            addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) { set(s?.toString()?.trim() ?: "") }
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            })
-        }
-        root.addView(e, LinearLayout.LayoutParams(MATCH, WRAP))
     }
 
     private fun refresh() {

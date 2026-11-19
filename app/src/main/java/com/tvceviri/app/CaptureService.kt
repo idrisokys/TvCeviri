@@ -23,10 +23,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
-import com.google.mlkit.nl.translate.TranslateLanguage
-import com.google.mlkit.nl.translate.Translation
-import com.google.mlkit.nl.translate.Translator
-import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -35,6 +31,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.Executors
 
 class CaptureService : Service() {
 
@@ -45,7 +42,6 @@ class CaptureService : Service() {
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
     private var vd: VirtualDisplay? = null
-    private var translator: Translator? = null
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     private var wm: WindowManager? = null
@@ -54,7 +50,12 @@ class CaptureService : Service() {
 
     @Volatile private var running = false
     private var lastText = ""
-    private var prevCtx = ""
+    private var seq = 0
+    private val net = Executors.newFixedThreadPool(2)
+    private val cache = object : LinkedHashMap<String, String>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+            size > 200
+    }
     private var emptyCount = 0
     private var cw = 0
     private var ch = 0
@@ -89,7 +90,7 @@ class CaptureService : Service() {
             override fun onStop() { main.post { stopSelf() } }
         }, main)
 
-        setupTranslator()
+        startCapture()
         return START_NOT_STICKY
     }
 
@@ -115,26 +116,6 @@ class CaptureService : Service() {
     }
 
     private fun toast(s: String) = main.post { Toast.makeText(this, s, Toast.LENGTH_LONG).show() }
-
-    private fun setupTranslator() {
-        val opts = TranslatorOptions.Builder()
-            .setSourceLanguage(TranslateLanguage.ENGLISH)
-            .setTargetLanguage(TranslateLanguage.TURKISH)
-            .build()
-        val t = Translation.getClient(opts)
-        translator = t
-        toast("Çeviri hazırlanıyor...")
-        t.downloadModelIfNeeded()
-            .addOnSuccessListener { startCapture() }
-            .addOnFailureListener {
-                if (Prefs.engine(this) != "mlkit") {
-                    startCapture() // Offline yedek model yok ama online motorlar çalışabilir
-                } else {
-                    toast("Model indirilemedi, internet bağlantısını kontrol et")
-                    stopSelf()
-                }
-            }
-    }
 
     private fun startCapture() {
         if (!running) return
@@ -173,7 +154,7 @@ class CaptureService : Service() {
         }
     }
 
-    private fun next() { if (running) bg?.postDelayed({ cycle() }, 500) }
+    private fun next() { if (running) bg?.postDelayed({ cycle() }, Prefs.delay(this).toLong()) }
 
     private fun restore() { main.post { if (shown) overlay?.visibility = View.VISIBLE } }
 
@@ -204,10 +185,12 @@ class CaptureService : Service() {
     // ---- Ana thread (ML Kit callback'leri) ----
 
     private fun handleText(raw: String) {
+        if (!running) return
         val text = raw.replace(Regex("\\s+"), " ").trim()
         if (text.length < 4 || !text.any { it.isLetter() }) {
             if (++emptyCount >= 2) {
                 lastText = ""
+                seq++ // bekleyen eski çevirileri geçersiz kıl
                 shown = false
                 overlay?.visibility = View.GONE
             } else restore()
@@ -218,27 +201,21 @@ class CaptureService : Service() {
         lastText = text
 
         val cleaned = clean(text)
-        val engine = Prefs.engine(this)
-        bg?.post {
-            var r: String? = when (engine) {
-                "google" -> tGoogle(cleaned)
-                "microsoft" -> tMicrosoft(cleaned)
-                "deepl" -> tDeepl(cleaned)
-                "gemini" -> tGemini(cleaned)
-                else -> null
-            }
-            // Seçilen motor başarısız olursa Google'a, o da olmazsa ML Kit'e düş.
-            if (r == null && engine != "mlkit" && engine != "google") r = tGoogle(cleaned)
-            if (r != null) prevCtx = cleaned
-            main.post { if (r != null) { show(r); next() } else translateOffline(cleaned) }
-        }
-    }
+        val mySeq = ++seq
+        val hit = cache[cleaned]
+        if (hit != null) { show(hit); next(); return }
 
-    private fun translateOffline(text: String) {
-        translator?.translate(text)
-            ?.addOnSuccessListener { prevCtx = text; show(it); next() }
-            ?.addOnFailureListener { restore(); next() }
-            ?: run { restore(); next() }
+        next() // çeviriyi bekleme, taramaya hemen devam et
+        val engine = Prefs.engine(this)
+        net.execute {
+            // Seçilen motor başarısız olursa diğerine düş.
+            val r = if (engine == "microsoft") tMicrosoft(cleaned) ?: tGoogle(cleaned)
+            else tGoogle(cleaned) ?: tMicrosoft(cleaned)
+            main.post {
+                if (mySeq != seq || !running) return@post // araya yeni altyazı girdi
+                if (r != null) { cache[cleaned] = r; show(r) } else restore()
+            }
+        }
     }
 
     private fun show(t: String) {
@@ -284,8 +261,8 @@ class CaptureService : Service() {
         body: String? = null
     ): String? = try {
         val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 4000
-        c.readTimeout = 7000
+        c.connectTimeout = 2500
+        c.readTimeout = 3500
         headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
         if (body != null) {
             c.requestMethod = "POST"
@@ -331,53 +308,6 @@ class CaptureService : Service() {
         }
     } catch (e: Exception) { null }
 
-    private fun tDeepl(t: String): String? = try {
-        val key = Prefs.deeplKey(this)
-        if (key.isEmpty()) null else {
-            val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
-            val r = http(
-                "https://$host/v2/translate",
-                mapOf(
-                    "Authorization" to "DeepL-Auth-Key $key",
-                    "Content-Type" to "application/x-www-form-urlencoded"
-                ),
-                "text=" + enc(t) + "&source_lang=EN&target_lang=TR"
-            )
-            if (r == null) null
-            else JSONObject(r).getJSONArray("translations").getJSONObject(0)
-                .getString("text").trim().ifEmpty { null }
-        }
-    } catch (e: Exception) { null }
-
-    /** Gemini: önceki repliği bağlam olarak verir, OCR hatalarını düzeltir. */
-    private fun tGemini(t: String): String? = try {
-        val key = Prefs.geminiKey(this)
-        if (key.isEmpty()) null else {
-            val model = Prefs.geminiModel(this).ifEmpty { "gemini-3.6-flash" }
-            val prompt = "Translate the following English movie/TV subtitle into natural, fluent " +
-                "Turkish, the way a good subtitle translator would. The text comes from OCR and may " +
-                "contain small errors; fix obvious ones. Output ONLY the Turkish translation, " +
-                "no quotes, no explanation.\n" +
-                (if (prevCtx.isNotEmpty()) "Previous line (context only, do not translate): $prevCtx\n" else "") +
-                "Subtitle: $t"
-            val reqBody = JSONObject().put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))
-                )
-            ).toString()
-            val r = http(
-                "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent",
-                mapOf("x-goog-api-key" to key, "Content-Type" to "application/json"),
-                reqBody
-            )
-            if (r == null) null
-            else JSONObject(r).getJSONArray("candidates").getJSONObject(0)
-                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
-                .getString("text").trim().ifEmpty { null }
-        }
-    } catch (e: Exception) { null }
-
     /** OCR'ın sık yaptığı hataları temizle; çeviriye temiz metin gitsin. */
     private fun clean(s: String): String = s
         .replace(Regex("[♪♫♬#*_]+"), " ")
@@ -388,12 +318,12 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         running = false
+        net.shutdownNow()
         try { overlay?.let { wm?.removeView(it) } } catch (_: Exception) {}
         overlay = null
         try { vd?.release() } catch (_: Exception) {}
         try { reader?.close() } catch (_: Exception) {}
         try { projection?.stop() } catch (_: Exception) {}
-        try { translator?.close() } catch (_: Exception) {}
         try { recognizer.close() } catch (_: Exception) {}
         bgThread?.quitSafely()
         super.onDestroy()

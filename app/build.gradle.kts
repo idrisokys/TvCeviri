@@ -27,5 +27,4 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("com.google.mlkit:text-recognition:16.0.1")
-    implementation("com.google.mlkit:translate:17.0.3")
 }

@@ -4,11 +4,8 @@ import android.content.Context
 
 object Prefs {
     val ENGINES = listOf(
-        "google" to "Google (anahtarsız, iyi)",
-        "microsoft" to "Microsoft Translator (anahtarsız, iyi)",
-        "deepl" to "DeepL (API anahtarı gerekir, çok iyi)",
-        "gemini" to "Gemini (API anahtarı gerekir, bağlamı anlar, en iyi)",
-        "mlkit" to "Offline ML Kit (internetsiz, zayıf)"
+        "google" to "Google",
+        "microsoft" to "Microsoft Translator"
     )
 
     private fun sp(c: Context) = c.getSharedPreferences("tvceviri", Context.MODE_PRIVATE)
@@ -39,15 +36,10 @@ object Prefs {
     fun cover(c: Context) = sp(c).getBoolean("cover", false)
     fun setCover(c: Context, v: Boolean) = sp(c).edit().putBoolean("cover", v).apply()
 
+    /** İki tarama arasındaki bekleme (ms). Büyüdükçe daha az işlem/ağ kullanılır. */
+    fun delay(c: Context) = int(c, "delay", 300)
+    fun setDelay(c: Context, v: Int) = putInt(c, "delay", v)
+
     fun engine(c: Context) = str(c, "engine", "google")
     fun setEngine(c: Context, v: String) = putStr(c, "engine", v)
-
-    fun deeplKey(c: Context) = str(c, "deeplKey", "")
-    fun setDeeplKey(c: Context, v: String) = putStr(c, "deeplKey", v)
-
-    fun geminiKey(c: Context) = str(c, "geminiKey", "")
-    fun setGeminiKey(c: Context, v: String) = putStr(c, "geminiKey", v)
-
-    fun geminiModel(c: Context) = str(c, "geminiModel", "gemini-3.6-flash")
-    fun setGeminiModel(c: Context, v: String) = putStr(c, "geminiModel", v)
 }
