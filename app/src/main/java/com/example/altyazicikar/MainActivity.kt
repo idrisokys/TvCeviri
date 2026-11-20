@@ -14,10 +14,14 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
+import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
+import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -28,6 +32,7 @@ import android.widget.Toast
 import java.io.File
 import java.io.IOException
 import java.util.Locale
+import java.util.LinkedHashSet
 
 class MainActivity : Activity() {
 
@@ -41,6 +46,8 @@ class MainActivity : Activity() {
     private var dav: DavClient? = null
     private var curPath = "/"
     private var items: List<DavItem> = emptyList()
+    private val selected = LinkedHashSet<String>()
+    private val DEFAULT_LANG = "eng"
     private var inBrowser = false
 
     @Volatile
@@ -175,6 +182,10 @@ class MainActivity : Activity() {
         }
         inBrowser = true
         curPath = path
+        selected.clear()
+        items = emptyList()
+        var shown: List<DavItem> = emptyList()
+        var query = ""
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val pathView = TextView(this).apply {
@@ -182,8 +193,11 @@ class MainActivity : Activity() {
             textSize = 13f
             setPadding(dp(12), dp(10), dp(12), dp(4))
         }
+
+        // 1. satır: Yukarı + arama kutusu
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(dp(8), 0, dp(8), 0)
         }
         val up = Button(this).apply {
@@ -191,21 +205,34 @@ class MainActivity : Activity() {
             isEnabled = path != client.rootPath
             setOnClickListener { showBrowser(parentOf(path, client.rootPath)) }
         }
-        val all = Button(this).apply {
-            text = "Hepsinden çıkar"
-            setOnClickListener { batchFolder() }
+        val search = EditText(this).apply {
+            hint = "🔍 Bu klasörde ara…"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine()
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
         }
+        bar.addView(up, LinearLayout.LayoutParams(WRAP, WRAP))
+        bar.addView(search, LinearLayout.LayoutParams(0, WRAP, 1f))
+
+        // 2. satır: seçim düğmeleri
+        val bar2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(8), 0, dp(8), 0)
+        }
+        val selAll = Button(this).apply { text = "Tümünü seç"; textSize = 12f }
+        val go = Button(this).apply { text = "Çıkar (0)"; textSize = 12f; isEnabled = false }
         val out = Button(this).apply {
             text = "Çıkış"
+            textSize = 12f
             setOnClickListener {
                 prefs.edit().clear().apply()
                 dav = null
                 showLogin(null)
             }
         }
-        bar.addView(up, LinearLayout.LayoutParams(0, WRAP, 1f))
-        bar.addView(all, LinearLayout.LayoutParams(0, WRAP, 1.4f))
-        bar.addView(out, LinearLayout.LayoutParams(0, WRAP, 1f))
+        bar2.addView(selAll, LinearLayout.LayoutParams(0, WRAP, 1.2f))
+        bar2.addView(go, LinearLayout.LayoutParams(0, WRAP, 1.2f))
+        bar2.addView(out, LinearLayout.LayoutParams(0, WRAP, 0.8f))
 
         val status = TextView(this).apply {
             text = "Yükleniyor…"
@@ -215,12 +242,76 @@ class MainActivity : Activity() {
 
         root.addView(pathView, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
+        root.addView(bar2, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(status, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(list, LinearLayout.LayoutParams(MATCH, 0, 1f))
         setContentView(root)
 
+        lateinit var adapter: RowAdapter
+
+        fun refreshHeader() {
+            val allSel = shown.isNotEmpty() && shown.all { selected.contains(it.href) }
+            selAll.text = if (allSel) "Seçimi kaldır" else "Tümünü seç"
+            selAll.isEnabled = shown.isNotEmpty()
+            go.text = "Çıkar (${selected.size})"
+            go.isEnabled = selected.isNotEmpty()
+            status.text = when {
+                items.isEmpty() -> "Klasör boş"
+                query.isNotEmpty() -> "${shown.size} / ${items.size} öğe · ${selected.size} seçili"
+                else -> "${items.size} öğe · ${selected.size} seçili"
+            }
+        }
+
+        fun applyFilter() {
+            val q = query.trim().lowercase(Locale.ROOT)
+            shown = if (q.isEmpty()) items
+            else items.filter { it.name.lowercase(Locale.ROOT).contains(q) }
+            adapter.setRows(shown)
+            refreshHeader()
+        }
+
+        adapter = RowAdapter { refreshHeader() }
+        list.adapter = adapter
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                query = s?.toString() ?: ""
+                applyFilter()
+            }
+        })
+
+        selAll.setOnClickListener {
+            val allSel = shown.isNotEmpty() && shown.all { selected.contains(it.href) }
+            if (allSel) shown.forEach { selected.remove(it.href) }
+            else shown.forEach { selected.add(it.href) }
+            adapter.notifyDataSetChanged()
+            refreshHeader()
+        }
+
+        // Dokununca doğrudan başlar (varsayılan dil: eng). Uzun basınca dil sorulur.
+        go.setOnClickListener {
+            val sel = items.filter { selected.contains(it.href) }
+            if (sel.isNotEmpty()) runBatch(sel, prefs.getString("lang", DEFAULT_LANG) ?: DEFAULT_LANG)
+        }
+        go.setOnLongClickListener {
+            val sel = items.filter { selected.contains(it.href) }
+            if (sel.isNotEmpty()) askBatch(sel)
+            true
+        }
+
         list.setOnItemClickListener { _, _, position, _ ->
-            if (position in items.indices) onItem(items[position])
+            if (position in shown.indices) onItem(shown[position])
+        }
+        list.setOnItemLongClickListener { _, _, position, _ ->
+            if (position in shown.indices) {
+                val h = shown[position].href
+                if (!selected.add(h)) selected.remove(h)
+                adapter.notifyDataSetChanged()
+                refreshHeader()
+            }
+            true
         }
 
         Thread {
@@ -229,11 +320,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (curPath != path) return@runOnUiThread
                     items = res
-                    status.text = if (res.isEmpty()) "Klasör boş" else "${res.size} öğe"
-                    val labels = res.map {
-                        if (it.isDir) "📁  ${it.name}" else "🎞  ${it.name}${sizeText(it.size)}"
-                    }
-                    list.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+                    applyFilter()
                 }
             } catch (e: AuthFailed) {
                 runOnUiThread { showLogin("Giriş başarısız: kullanıcı adı/şifreyi kontrol et") }
@@ -241,6 +328,53 @@ class MainActivity : Activity() {
                 runOnUiThread { status.text = "Hata: ${e.message ?: e.javaClass.simpleName}" }
             }
         }.start()
+    }
+
+    /** Onay kutulu liste satırları. Kutu seçer, satıra dokunmak klasörü açar / dosyayı tarar. */
+    private inner class RowAdapter(val onChange: () -> Unit) : BaseAdapter() {
+        private var rows: List<DavItem> = emptyList()
+
+        fun setRows(r: List<DavItem>) {
+            rows = r
+            notifyDataSetChanged()
+        }
+
+        override fun getCount() = rows.size
+        override fun getItem(position: Int): Any = rows[position]
+        override fun getItemId(position: Int) = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val row: LinearLayout
+            val cb: CheckBox
+            val tv: TextView
+            if (convertView is LinearLayout) {
+                row = convertView
+                cb = row.getChildAt(0) as CheckBox
+                tv = row.getChildAt(1) as TextView
+            } else {
+                row = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(dp(8), dp(6), dp(12), dp(6))
+                }
+                cb = CheckBox(this@MainActivity).apply { isFocusable = false }
+                tv = TextView(this@MainActivity).apply {
+                    textSize = 16f
+                    setPadding(dp(4), dp(8), 0, dp(8))
+                }
+                row.addView(cb, LinearLayout.LayoutParams(WRAP, WRAP))
+                row.addView(tv, LinearLayout.LayoutParams(0, WRAP, 1f))
+            }
+            val d = rows[position]
+            tv.text = if (d.isDir) "📁  ${d.name}" else "🎞  ${d.name}${sizeText(d.size)}"
+            cb.isChecked = selected.contains(d.href)
+            cb.setOnClickListener {
+                val h = rows[position].href
+                if (cb.isChecked) selected.add(h) else selected.remove(h)
+                onChange()
+            }
+            return row
+        }
     }
 
     private fun onItem(item: DavItem) {
@@ -283,8 +417,10 @@ class MainActivity : Activity() {
         }
         val labels = tracks.map { it.label() }.toTypedArray<CharSequence>()
         val checked = BooleanArray(tracks.size)
-        val firstOk = tracks.indexOfFirst { it.supported }
-        if (firstOk >= 0) checked[firstOk] = true
+        val lang = prefs.getString("lang", DEFAULT_LANG) ?: DEFAULT_LANG
+        val best = Lang.pickBest(tracks, lang) ?: tracks.firstOrNull { it.supported }
+        val bi = tracks.indexOf(best)
+        if (bi >= 0) checked[bi] = true
         AlertDialog.Builder(this)
             .setTitle(item.name)
             .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
@@ -297,6 +433,7 @@ class MainActivity : Activity() {
     }
 
     private fun extractSingle(item: DavItem, sel: List<MkvTrack>) {
+        usedFallback = false
         val b = showBusy(item.name, item.size > 0)
         Thread {
             try {
@@ -320,10 +457,9 @@ class MainActivity : Activity() {
     }
 
     /** Dosyayı akışla okur, seçili izleri SRT'ye çevirip kaydeder, dosya adlarını döndürür. */
-    private fun extractTo(item: DavItem, sel: List<MkvTrack>, b: Busy): List<String> {
+    private fun extractTo(item: DavItem, sel: List<MkvTrack>, b: Busy, prefix: String = ""): List<String> {
         val client = dav ?: throw IOException("Bağlantı yok")
         var last = 0L
-        usedFallback = false
         val res = client.collect(item, sel.map { it.number }.toSet(), { cancelFlag }) { pos ->
             val now = System.currentTimeMillis()
             if (now - last > 250) {
@@ -331,7 +467,7 @@ class MainActivity : Activity() {
                 b.update(pos, item.size)
             }
         }
-        val base = safeName(item.name.substringBeforeLast('.'))
+        val base = safeName(prefix + item.name.substringBeforeLast('.'))
         val names = ArrayList<String>()
         for (t in sel) {
             val ev = res.events[t.number] ?: emptyList()
@@ -349,51 +485,104 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------- toplu işlem
 
-    private fun batchFolder() {
-        val vids = items.filter { !it.isDir && isVideo(it.name) }
-        if (vids.isEmpty()) {
-            toast("Bu klasörde .mkv dosyası yok")
-            return
-        }
+    /** Seçili dosya/klasörler için dil kodunu sorar (varsayılan: eng) ve işlemi başlatır. */
+    private fun askBatch(sel: List<DavItem>) {
+        val dirs = sel.count { it.isDir }
+        val files = sel.size - dirs
         val et = EditText(this).apply {
-            hint = "tur, eng, jpn … (boş = ilk altyazı)"
+            hint = "eng, tur, jpn … (boş = ilk altyazı)"
+            setText(prefs.getString("lang", DEFAULT_LANG))
             setSingleLine()
         }
+        val parts = ArrayList<String>()
+        if (files > 0) parts.add("$files dosya")
+        if (dirs > 0) parts.add("$dirs klasör (alt klasörleriyle taranır)")
         AlertDialog.Builder(this)
-            .setTitle("${vids.size} dosya için dil kodu")
-            .setMessage("Her dosyadan bu dile uyan ilk metin altyazısı çıkarılır.")
+            .setTitle("Altyazı dili")
+            .setMessage("Seçili: ${parts.joinToString(", ")}.\nHer videodan bu dile uyan en uygun metin altyazısı SRT olarak çıkarılır.")
             .setView(et)
-            .setPositiveButton("Başla") { _, _ -> runBatch(vids, et.text.toString().trim()) }
+            .setPositiveButton("Başla") { _, _ ->
+                val lang = et.text.toString().trim()
+                prefs.edit().putString("lang", lang).apply()
+                runBatch(sel, lang)
+            }
             .setNegativeButton("Vazgeç", null)
             .show()
     }
 
-    private fun runBatch(vids: List<DavItem>, lang: String) {
-        val b = showBusy("Başlıyor…", true)
+    /** Seçilen dosyaları alır, klasörleri alt klasörleriyle gezip .mkv/.webm dosyalarını toplar. */
+    private fun gatherVideos(client: DavClient, start: List<DavItem>, fail: MutableList<String>): List<DavItem> {
+        val out = LinkedHashMap<String, DavItem>()
+        fun walk(node: DavItem, depth: Int) {
+            if (cancelFlag) throw CancelledException()
+            if (!node.isDir) {
+                if (isVideo(node.name)) out[node.href] = node
+                return
+            }
+            if (depth > 8) return
+            val kids = try {
+                client.list(node.href)
+            } catch (e: AuthFailed) {
+                throw e
+            } catch (e: Exception) {
+                fail.add("${node.name}: klasör okunamadı (${e.message ?: e.javaClass.simpleName})")
+                return
+            }
+            for (k in kids) walk(k, depth + 1)
+        }
+        for (s in start) walk(s, 0)
+        return out.values.toList()
+    }
+
+    private fun parentName(href: String): String =
+        Uri.decode(href.trimEnd('/').substringBeforeLast('/', "").substringAfterLast('/'))
+
+    private fun runBatch(sel: List<DavItem>, lang: String) {
+        val b = showBusy("Klasörler taranıyor…", false)
         Thread {
             val ok = ArrayList<String>()
             val fail = ArrayList<String>()
-            for ((i, v) in vids.withIndex()) {
-                if (cancelFlag) break
-                runOnUiThread {
-                    b.title.text = "${i + 1}/${vids.size}  ${v.name}"
-                    b.bar.progress = 0
-                }
-                try {
-                    val client = dav ?: throw IOException("Bağlantı yok")
-                    val h = client.readHeader(v)
-                    val cands = h.tracks.filter { it.supported }
-                    val pick = cands.firstOrNull { Lang.matches(it, lang) }
-                    if (pick == null) {
-                        fail.add("${v.name}: uygun altyazı bulunamadı")
-                        continue
+            try {
+                val client = dav ?: throw IOException("Bağlantı yok")
+                val vids = gatherVideos(client, sel, fail)
+                if (vids.isEmpty()) {
+                    runOnUiThread {
+                        dismissBusy()
+                        showReport(ok, if (fail.isEmpty()) listOf("Seçimde .mkv/.webm dosyası yok") else fail)
                     }
-                    ok.addAll(extractTo(v, listOf(pick), b))
-                } catch (e: CancelledException) {
-                    break
-                } catch (e: Exception) {
-                    fail.add("${v.name}: ${e.message ?: e.javaClass.simpleName}")
+                    return@Thread
                 }
+                // Farklı klasörlerde aynı adlı videolar birbirinin üzerine yazılmasın
+                val nameCount = vids.groupingBy { it.name }.eachCount()
+                usedFallback = false
+                for ((i, v) in vids.withIndex()) {
+                    if (cancelFlag) break
+                    runOnUiThread {
+                        b.bar.isIndeterminate = false
+                        b.title.text = "${i + 1}/${vids.size}  ${v.name}"
+                        b.bar.progress = 0
+                    }
+                    try {
+                        val h = client.readHeader(v)
+                        val pick = Lang.pickBest(h.tracks, lang)
+                        if (pick == null) {
+                            fail.add("${v.name}: uygun altyazı bulunamadı")
+                            continue
+                        }
+                        val prefix = if ((nameCount[v.name] ?: 1) > 1) parentName(v.href) + " - " else ""
+                        ok.addAll(extractTo(v, listOf(pick), b, prefix))
+                    } catch (e: CancelledException) {
+                        break
+                    } catch (e: AuthFailed) {
+                        throw e
+                    } catch (e: Exception) {
+                        fail.add("${v.name}: ${e.message ?: e.javaClass.simpleName}")
+                    }
+                }
+            } catch (e: CancelledException) {
+                // işlem kullanıcı tarafından iptal edildi; eldeki sonuç gösterilir
+            } catch (e: Exception) {
+                fail.add(e.message ?: e.javaClass.simpleName)
             }
             runOnUiThread {
                 dismissBusy()

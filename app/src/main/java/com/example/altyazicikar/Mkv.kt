@@ -344,6 +344,30 @@ object Lang {
         return norm(t.language) == norm(q) ||
             t.name.lowercase(Locale.ROOT).contains(q.lowercase(Locale.ROOT))
     }
+
+    /** Dil kodu birebir uyuyor mu (yalnızca ad eşleşmesi değil). */
+    fun sameLang(t: MkvTrack, query: String): Boolean {
+        val q = query.trim()
+        if (q.isEmpty()) return true
+        return norm(t.language) == norm(q)
+    }
+
+    private val EXTRA = listOf("sign", "song", "forced", "commentary", "karaoke", "lyrics")
+
+    /** "Signs & Songs", "Forced" gibi tam diyalog içermeyen akışlar mı. */
+    fun isExtra(t: MkvTrack): Boolean {
+        val n = t.name.lowercase(Locale.ROOT)
+        return EXTRA.any { n.contains(it) }
+    }
+
+    /**
+     * Desteklenen metin altyazıları arasından [query] diline en uygun olanı seçer.
+     * Önce dili birebir uyanlar, sonra "signs/songs/forced" olmayanlar tercih edilir.
+     */
+    fun pickBest(tracks: List<MkvTrack>, query: String): MkvTrack? {
+        val c = tracks.filter { it.supported && matches(it, query) }
+        return c.minByOrNull { (if (sameLang(it, query)) 0 else 5) + (if (isExtra(it)) 10 else 0) }
+    }
 }
 
 object SubtitleWriter {

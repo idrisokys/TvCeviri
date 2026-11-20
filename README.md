@@ -31,9 +31,15 @@ Dosyayı telefona indirmez; akış olarak okur ve yalnızca altyazı blokların�
 
 - Giriş: sunucu `https://webdav.torbox.app`, kullanıcı adı ve şifre TorBox hesabın
   (TorBox WebDAV için ayrı bir şifre/anahtar istiyorsa onu gir).
-- Klasörde bir `.mkv`'ye dokun → altyazı akışları listelenir → seç → **Çıkar**.
-- **Hepsinden çıkar**: açık klasördeki tüm `.mkv` dosyalarından, yazdığın dil koduna
-  (`tur`, `eng`, `jpn`…) uyan ilk altyazıyı çıkarır. Boş bırakırsan ilk altyazıyı alır.
+- **↑ Yukarı** düğmesinin yanındaki **arama kutusu** açık klasördeki klasör/dosya adlarını anında süzer.
+- Her satırın solundaki **onay kutusuyla** tek tek seç (satıra uzun basmak da seçer);
+  **Tümünü seç** görünen (aramaya uyan) öğelerin hepsini seçer.
+- **Çıkar (N)**: seçilenlerden **sormadan doğrudan** altyazı çıkarmaya başlar (düğmeye uzun basarsan dil sorulur). Seçilen klasörler alt klasörleriyle taranıp içindeki tüm
+  `.mkv`/`.webm` dosyaları işlenir. Dil varsayılan olarak **`eng`**'dir (uzun basıp değiştirirsen son dil hatırlanır;
+  boş bırakırsan ilk altyazı alınır). Aynı dilde birden çok akış varsa "Signs/Songs/Forced" olmayan tam diyalog
+  akışı tercih edilir.
+- Bir `.mkv`'ye dokunursan altyazı akışları listelenir; İngilizce akış hazır işaretli gelir → **Çıkar**.
+- Çıkan her altyazı, ASS/SSA ise otomatik **SRT**'ye çevrilir; zaten SRT ise olduğu gibi kaydedilir.
 - Dosya adı `Video Adı.dil.srt` biçiminde olur; çoğu oynatıcı (MX Player, VLC, mpv) otomatik yükler.
 
 ## Sınırlar
