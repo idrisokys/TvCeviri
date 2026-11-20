@@ -1,9 +1,12 @@
-name: Build APK
+name: APK derle
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -16,14 +19,25 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - uses: android-actions/setup-android@v3
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+      - name: Derle
+        run: gradle assembleDebug --no-daemon --stacktrace
 
-      - uses: actions/upload-artifact@v4
+      - name: APK'yı artifact olarak yükle
+        uses: actions/upload-artifact@v4
         with:
-          name: TVCeviri-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: AltyaziCikar-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Releases sayfasına koy (telefondan doğrudan indirmek için)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk AltyaziCikar.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest AltyaziCikar.apk --title "Son sürüm" --notes "Otomatik derlenen APK"

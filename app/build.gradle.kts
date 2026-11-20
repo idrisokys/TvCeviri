@@ -4,27 +4,32 @@ plugins {
 }
 
 android {
-    namespace = "com.tvceviri.app"
+    namespace = "com.example.altyazicikar"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.tvceviri.app"
-        minSdk = 24
-        targetSdk = 34
+        applicationId = "com.example.altyazicikar"
+        minSdk = 29
+        targetSdk = 33
         versionCode = 1
         versionName = "1.0"
-
-        // Sadece ARMv7 (32-bit ARM) cihazlar için derle
-        ndk { abiFilters += listOf("armeabi-v7a") }
     }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
