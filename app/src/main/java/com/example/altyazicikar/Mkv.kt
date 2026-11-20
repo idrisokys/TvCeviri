@@ -364,6 +364,63 @@ object SubtitleWriter {
     fun build(track: MkvTrack, events: List<SubEvent>): ByteArray =
         if (track.codec == "S_TEXT/UTF8") srt(events) else ass(track, events)
 
+    /** Her metin altyazısını (ASS/SSA/SRT) doğrudan SRT olarak üretir. */
+    fun buildSrt(track: MkvTrack, events: List<SubEvent>): ByteArray =
+        if (track.codec == "S_TEXT/UTF8") srt(events) else assToSrt(events)
+
+    private val TAG_BLOCK = Regex("\\{[^}]*\\}")
+    private val STYLE_TAG = Regex("\\\\([ibu])([01])(?![0-9])")
+    private val DRAWING = Regex("\\\\p[1-9]")
+
+    /** ASS stil bloklarını atar; italik/kalın/altçizgi etiketlerini SRT karşılıklarına çevirir. */
+    private fun assTextToSrt(raw: String): String {
+        if (DRAWING.containsMatchIn(raw)) return ""
+        val open = linkedSetOf<Char>()
+        val sb = StringBuilder()
+        var pos = 0
+        for (m in TAG_BLOCK.findAll(raw)) {
+            sb.append(raw, pos, m.range.first)
+            pos = m.range.last + 1
+            for (t in STYLE_TAG.findAll(m.value)) {
+                val c = t.groupValues[1][0]
+                if (t.groupValues[2] == "1") {
+                    if (open.add(c)) sb.append('<').append(c).append('>')
+                } else if (open.remove(c)) {
+                    sb.append("</").append(c).append('>')
+                }
+            }
+        }
+        sb.append(raw, pos, raw.length)
+        for (c in open.reversed()) sb.append("</").append(c).append('>')
+        return sb.toString()
+            .replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ")
+            .replace("{", "").replace("}", "")
+            .lines().map { it.trim() }.filter { it.isNotEmpty() }
+            .joinToString("\n")
+    }
+
+    private fun assToSrt(events: List<SubEvent>): ByteArray {
+        val sorted = events.sortedBy { it.startMs }
+        val sb = StringBuilder("\uFEFF")
+        val seen = HashSet<String>()
+        var n = 0
+        for (e in sorted) {
+            val s = String(e.payload, Charsets.UTF_8)
+            // ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+            val parts = s.split(",", limit = 9)
+            if (parts.size < 9) continue
+            val text = assTextToSrt(parts[8].trimEnd('\r', '\n', '\u0000'))
+            if (text.isBlank()) continue
+            if (!seen.add("${e.startMs}|$text")) continue
+            n++
+            val end = e.startMs + (if (e.durMs >= 0) e.durMs else 2000L)
+            sb.append(n).append('\n')
+                .append(srtTime(e.startMs)).append(" --> ").append(srtTime(end)).append('\n')
+                .append(text).append("\n\n")
+        }
+        return sb.toString().toByteArray(Charsets.UTF_8)
+    }
+
     private class Line(val order: Long, val idx: Int, val text: String)
 
     private fun ass(track: MkvTrack, events: List<SubEvent>): ByteArray {

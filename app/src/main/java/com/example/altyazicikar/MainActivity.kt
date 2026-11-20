@@ -3,7 +3,13 @@ package com.example.altyazicikar
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentValues
+import android.Manifest
+import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
+import android.os.Build
+import android.provider.Settings
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -19,11 +25,15 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 import java.io.IOException
 import java.util.Locale
 
 class MainActivity : Activity() {
 
+    private val TARGET_DIR = "X video player/subtitle"
+    private val TARGET_LABEL = "X video player/subtitle"
+    private val FALLBACK_LABEL = "İndirilenler/Altyazi"
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
@@ -35,6 +45,9 @@ class MainActivity : Activity() {
 
     @Volatile
     private var cancelFlag = false
+    @Volatile
+    private var usedFallback = false
+    private var askedAccess = false
     private var busy: Busy? = null
 
     private inner class Busy(
@@ -68,6 +81,12 @@ class MainActivity : Activity() {
         } else {
             showLogin(null)
         }
+        askStorageAccess()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (askedAccess) toastIfNoAccess()
     }
 
     @Deprecated("Deprecated in Java")
@@ -300,10 +319,11 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** Dosyayı akışla okur, seçili izleri İndirilenler/Altyazi içine yazar, dosya adlarını döndürür. */
+    /** Dosyayı akışla okur, seçili izleri SRT'ye çevirip kaydeder, dosya adlarını döndürür. */
     private fun extractTo(item: DavItem, sel: List<MkvTrack>, b: Busy): List<String> {
         val client = dav ?: throw IOException("Bağlantı yok")
         var last = 0L
+        usedFallback = false
         val res = client.collect(item, sel.map { it.number }.toSet(), { cancelFlag }) { pos ->
             val now = System.currentTimeMillis()
             if (now - last > 250) {
@@ -316,11 +336,11 @@ class MainActivity : Activity() {
         for (t in sel) {
             val ev = res.events[t.number] ?: emptyList()
             if (ev.isEmpty()) continue
-            val data = SubtitleWriter.build(t, ev)
+            val data = SubtitleWriter.buildSrt(t, ev)
             val lang = safeName(t.language.ifBlank { "und" })
             val dupe = sel.count { it.language == t.language } > 1
-            val name = if (dupe) "$base.$lang.t${t.number}.${t.ext}" else "$base.$lang.${t.ext}"
-            saveToDownloads(name, data)
+            val name = if (dupe) "$base.$lang.t${t.number}.srt" else "$base.$lang.srt"
+            saveSubtitle(name, data)
             names.add(name)
         }
         if (names.isEmpty()) throw IOException("Seçilen akışta altyazı satırı bulunamadı")
@@ -424,7 +444,7 @@ class MainActivity : Activity() {
     private fun showReport(ok: List<String>, fail: List<String>) {
         val sb = StringBuilder()
         if (ok.isNotEmpty()) {
-            sb.append("Kaydedildi (İndirilenler/Altyazi):\n")
+            sb.append("Kaydedildi (").append(if (usedFallback) FALLBACK_LABEL else TARGET_LABEL).append("):\n")
             for (n in ok) sb.append("• ").append(n).append('\n')
         }
         if (fail.isNotEmpty()) {
@@ -450,6 +470,56 @@ class MainActivity : Activity() {
             .setMessage(e.message ?: e.javaClass.simpleName)
             .setPositiveButton("Tamam", null)
             .show()
+    }
+
+    private fun hasStorageAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
+        else checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private fun askStorageAccess() {
+        if (hasStorageAccess()) return
+        askedAccess = true
+        AlertDialog.Builder(this)
+            .setTitle("Depolama izni")
+            .setMessage("Altyazıların otomatik olarak \"$TARGET_LABEL\" klasörüne kaydedilmesi için tüm dosyalara erişim izni gerekir. İzin vermezsen $FALLBACK_LABEL klasörüne kaydedilir.")
+            .setPositiveButton("İzin ver") { _, _ ->
+                if (Build.VERSION.SDK_INT >= 30) {
+                    try {
+                        startActivity(
+                            Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
+                        )
+                    } catch (e: Exception) {
+                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    }
+                } else {
+                    requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 1)
+                }
+            }
+            .setNegativeButton("Şimdi değil", null)
+            .show()
+    }
+
+    private fun toastIfNoAccess() {
+        askedAccess = false
+        if (!hasStorageAccess()) toast("İzin verilmedi: $FALLBACK_LABEL kullanılacak")
+    }
+
+    /** X video player/subtitle klasörüne yazar; izin yoksa İndirilenler/Altyazi'ya düşer. */
+    private fun saveSubtitle(name: String, data: ByteArray) {
+        if (hasStorageAccess()) {
+            try {
+                val dir = File(Environment.getExternalStorageDirectory(), TARGET_DIR)
+                if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Klasör oluşturulamadı")
+                val f = File(dir, name)
+                f.writeBytes(data)
+                MediaScannerConnection.scanFile(this, arrayOf(f.absolutePath), null, null)
+                return
+            } catch (e: Exception) {
+                // izin var ama yazılamadıysa yedek konuma düş
+            }
+        }
+        usedFallback = true
+        saveToDownloads(name, data)
     }
 
     /** Android 10+ için İndirilenler/Altyazi klasörüne izinsiz yazar. */
