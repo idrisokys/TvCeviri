@@ -36,8 +36,8 @@ import java.util.LinkedHashSet
 
 class MainActivity : Activity() {
 
-    private val TARGET_DIR = "X video player/subtitle"
-    private val TARGET_LABEL = "X video player/subtitle"
+    private val TARGET_DIR = "X Video Player"
+    private val TARGET_LABEL = "X Video Player"
     private val FALLBACK_LABEL = "İndirilenler/Altyazi"
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -49,6 +49,7 @@ class MainActivity : Activity() {
     private val selected = LinkedHashSet<String>()
     private val DEFAULT_LANG = "eng"
     private var inBrowser = false
+    private var sortByDate = true
 
     @Volatile
     private var cancelFlag = false
@@ -80,6 +81,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("cfg", MODE_PRIVATE)
+        sortByDate = prefs.getBoolean("sortDate", true)
         val u = prefs.getString("url", null)
         val n = prefs.getString("user", null)
         val p = prefs.getString("pass", null)
@@ -185,6 +187,7 @@ class MainActivity : Activity() {
         selected.clear()
         items = emptyList()
         var shown: List<DavItem> = emptyList()
+        var rawItems: List<DavItem> = emptyList()
         var query = ""
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -194,17 +197,22 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(10), dp(12), dp(4))
         }
 
-        // 1. satır: Yukarı + arama kutusu
+        // 1. satır: Geri + arama kutusu + aA (sıralama)
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(dp(8), 0, dp(8), 0)
         }
         val up = Button(this).apply {
-            text = "↑ Yukarı"
-            isEnabled = path != client.rootPath
-            setOnClickListener { showBrowser(parentOf(path, client.rootPath)) }
+            text = "← Geri"
+            setOnClickListener {
+                if (path != client.rootPath) showBrowser(parentOf(path, client.rootPath))
+                else toast("En üst klasördesin")
+            }
+            // Hesaptan çıkış: Geri düğmesine uzun bas
+            setOnLongClickListener { confirmLogout(); true }
         }
+        val sortBtn = Button(this).apply { text = "aA" }
         val search = EditText(this).apply {
             hint = "🔍 Bu klasörde ara…"
             inputType = InputType.TYPE_CLASS_TEXT
@@ -213,6 +221,7 @@ class MainActivity : Activity() {
         }
         bar.addView(up, LinearLayout.LayoutParams(WRAP, WRAP))
         bar.addView(search, LinearLayout.LayoutParams(0, WRAP, 1f))
+        bar.addView(sortBtn, LinearLayout.LayoutParams(WRAP, WRAP))
 
         // 2. satır: seçim düğmeleri
         val bar2 = LinearLayout(this).apply {
@@ -221,18 +230,8 @@ class MainActivity : Activity() {
         }
         val selAll = Button(this).apply { text = "Tümünü seç"; textSize = 12f }
         val go = Button(this).apply { text = "Çıkar (0)"; textSize = 12f; isEnabled = false }
-        val out = Button(this).apply {
-            text = "Çıkış"
-            textSize = 12f
-            setOnClickListener {
-                prefs.edit().clear().apply()
-                dav = null
-                showLogin(null)
-            }
-        }
-        bar2.addView(selAll, LinearLayout.LayoutParams(0, WRAP, 1.2f))
-        bar2.addView(go, LinearLayout.LayoutParams(0, WRAP, 1.2f))
-        bar2.addView(out, LinearLayout.LayoutParams(0, WRAP, 0.8f))
+        bar2.addView(selAll, LinearLayout.LayoutParams(0, WRAP, 1f))
+        bar2.addView(go, LinearLayout.LayoutParams(0, WRAP, 1f))
 
         val status = TextView(this).apply {
             text = "Yükleniyor…"
@@ -255,14 +254,18 @@ class MainActivity : Activity() {
             selAll.isEnabled = shown.isNotEmpty()
             go.text = "Çıkar (${selected.size})"
             go.isEnabled = selected.isNotEmpty()
+            val order = if (sortByDate) "en yeni üstte" else "A-Z"
             status.text = when {
                 items.isEmpty() -> "Klasör boş"
-                query.isNotEmpty() -> "${shown.size} / ${items.size} öğe · ${selected.size} seçili"
-                else -> "${items.size} öğe · ${selected.size} seçili"
+                query.isNotEmpty() -> "${shown.size} / ${items.size} öğe · ${selected.size} seçili · $order"
+                else -> "${items.size} öğe · ${selected.size} seçili · $order"
             }
         }
 
         fun applyFilter() {
+            // Liste sunucudan klasör-önce + doğal ada göre gelir (A-Z);
+            // tarih modunda en yeni değişiklik en üste (sıralama kararlı).
+            items = if (sortByDate) rawItems.sortedByDescending { it.modified } else rawItems
             val q = query.trim().lowercase(Locale.ROOT)
             shown = if (q.isEmpty()) items
             else items.filter { it.name.lowercase(Locale.ROOT).contains(q) }
@@ -281,6 +284,14 @@ class MainActivity : Activity() {
                 applyFilter()
             }
         })
+
+        sortBtn.setOnClickListener {
+            sortByDate = !sortByDate
+            prefs.edit().putBoolean("sortDate", sortByDate).apply()
+            applyFilter()
+            list.setSelection(0)
+            toast(if (sortByDate) "Sıralama: en yeni üstte" else "Sıralama: harf sırası")
+        }
 
         selAll.setOnClickListener {
             val allSel = shown.isNotEmpty() && shown.all { selected.contains(it.href) }
@@ -319,7 +330,7 @@ class MainActivity : Activity() {
                 val res = client.list(path)
                 runOnUiThread {
                     if (curPath != path) return@runOnUiThread
-                    items = res
+                    rawItems = res
                     applyFilter()
                 }
             } catch (e: AuthFailed) {
@@ -328,6 +339,19 @@ class MainActivity : Activity() {
                 runOnUiThread { status.text = "Hata: ${e.message ?: e.javaClass.simpleName}" }
             }
         }.start()
+    }
+
+    private fun confirmLogout() {
+        AlertDialog.Builder(this)
+            .setTitle("Çıkış")
+            .setMessage("Kayıtlı hesap bilgileri silinsin mi?")
+            .setPositiveButton("Çıkış yap") { _, _ ->
+                prefs.edit().remove("url").remove("user").remove("pass").apply()
+                dav = null
+                showLogin(null)
+            }
+            .setNegativeButton("Vazgeç", null)
+            .show()
     }
 
     /** Onay kutulu liste satırları. Kutu seçer, satıra dokunmak klasörü açar / dosyayı tarar. */
@@ -440,7 +464,7 @@ class MainActivity : Activity() {
                 val saved = extractTo(item, sel, b)
                 runOnUiThread {
                     dismissBusy()
-                    showReport(saved, emptyList())
+                    finishWork(saved, emptyList())
                 }
             } catch (e: CancelledException) {
                 runOnUiThread {
@@ -548,7 +572,7 @@ class MainActivity : Activity() {
                 if (vids.isEmpty()) {
                     runOnUiThread {
                         dismissBusy()
-                        showReport(ok, if (fail.isEmpty()) listOf("Seçimde .mkv/.webm dosyası yok") else fail)
+                        finishWork(ok, if (fail.isEmpty()) listOf("Seçimde .mkv/.webm dosyası yok") else fail)
                     }
                     return@Thread
                 }
@@ -586,7 +610,7 @@ class MainActivity : Activity() {
             }
             runOnUiThread {
                 dismissBusy()
-                showReport(ok, fail)
+                finishWork(ok, fail)
             }
         }.start()
     }
@@ -630,7 +654,23 @@ class MainActivity : Activity() {
         busy = null
     }
 
-    private fun showReport(ok: List<String>, fail: List<String>) {
+    /**
+     * İşlem bitince: hepsi başarılıysa uygulama kendiliğinden kapanır.
+     * Hata varsa rapor gösterilir ve Tamam'a basılınca (en az bir altyazı çıktıysa) kapanır.
+     * İptal edildiyse uygulama açık kalır.
+     */
+    private fun finishWork(ok: List<String>, fail: List<String>) {
+        val cancelled = cancelFlag
+        if (ok.isNotEmpty() && fail.isEmpty() && !cancelled) {
+            val where = if (usedFallback) FALLBACK_LABEL else TARGET_LABEL
+            Toast.makeText(this, "${ok.size} altyazı kaydedildi → $where", Toast.LENGTH_LONG).show()
+            finishAndRemoveTask()
+        } else {
+            showReport(ok, fail, closeAfter = ok.isNotEmpty() && !cancelled)
+        }
+    }
+
+    private fun showReport(ok: List<String>, fail: List<String>, closeAfter: Boolean = false) {
         val sb = StringBuilder()
         if (ok.isNotEmpty()) {
             sb.append("Kaydedildi (").append(if (usedFallback) FALLBACK_LABEL else TARGET_LABEL).append("):\n")
@@ -646,6 +686,7 @@ class MainActivity : Activity() {
             .setTitle("Sonuç")
             .setMessage(sb.toString())
             .setPositiveButton("Tamam", null)
+            .setOnDismissListener { if (closeAfter) finishAndRemoveTask() }
             .show()
     }
 

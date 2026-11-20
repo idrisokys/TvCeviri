@@ -13,12 +13,13 @@ import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
 import java.net.URI
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.xml.parsers.DocumentBuilderFactory
 
 class AuthFailed : IOException("Kullanıcı adı veya şifre reddedildi")
 
-class DavItem(val name: String, val href: String, val isDir: Boolean, val size: Long)
+class DavItem(val name: String, val href: String, val isDir: Boolean, val size: Long, val modified: Long = 0L)
 
 class CollectResult(val header: MkvHeader, val events: Map<Long, List<SubEvent>>)
 
@@ -79,7 +80,8 @@ class DavClient(baseUrl: String, user: String, pass: String) {
             val name = Uri.decode(rawPath.trimEnd('/').substringAfterLast('/'))
             if (name.isEmpty()) continue
             val href = if (isDir && !rawPath.endsWith("/")) "$rawPath/" else rawPath
-            out.add(DavItem(name, href, isDir, size))
+            val modText = firstText(el, "getlastmodified").ifEmpty { firstText(el, "creationdate") }
+            out.add(DavItem(name, href, isDir, size, parseDate(modText)))
         }
         out.sortWith(Comparator { a, b ->
             if (a.isDir != b.isDir) {
@@ -89,6 +91,34 @@ class DavClient(baseUrl: String, user: String, pass: String) {
             }
         })
         return out
+    }
+
+    private fun firstText(el: Element, tag: String): String {
+        val n = el.getElementsByTagNameNS("DAV:", tag)
+        return if (n.length > 0) n.item(0).textContent.trim() else ""
+    }
+
+    /** RFC 1123 (getlastmodified) veya ISO 8601 (creationdate) tarihini ms'ye çevirir; olmazsa 0. */
+    private fun parseDate(s: String): Long {
+        if (s.isEmpty()) return 0L
+        val patterns = arrayOf(
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "EEEE, dd-MMM-yy HH:mm:ss zzz",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        )
+        for (p in patterns) {
+            try {
+                val f = java.text.SimpleDateFormat(p, Locale.US)
+                f.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                val d = f.parse(s)
+                if (d != null) return d.time
+            } catch (_: Exception) {
+            }
+        }
+        return 0L
     }
 
     private fun norm(p: String): String = Uri.decode(p).trimEnd('/')

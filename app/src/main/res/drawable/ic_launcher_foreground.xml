@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Anten -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M54,35 L43,24 M54,35 L65,24" />
+    <!-- Ayaklar -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M40,72 L37,79 M68,72 L71,79" />
+    <!-- Gövde -->
+    <path
+        android:fillColor="#F2F4F8"
+        android:pathData="M32,35 H76 A5,5 0 0 1 81,40 V67 A5,5 0 0 1 76,72 H32 A5,5 0 0 1 27,67 V40 A5,5 0 0 1 32,35 Z" />
+    <!-- Ekran -->
+    <path
+        android:fillColor="#12B5AD"
+        android:pathData="M33,40 H64 A3,3 0 0 1 67,43 V64 A3,3 0 0 1 64,67 H33 A3,3 0 0 1 30,64 V43 A3,3 0 0 1 33,40 Z" />
+    <!-- Oynat üçgeni -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M43,47 L43,60 L55,53.5 Z" />
+    <!-- Düğmeler -->
+    <path
+        android:fillColor="#1B2B4B"
+        android:pathData="M74,48 m-2.5,0 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0" />
+    <path
+        android:fillColor="#1B2B4B"
+        android:pathData="M74,58 m-2.5,0 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0" />
+</vector>

@@ -1,7 +1,7 @@
 # Altyazı Çıkar
 
 TorBox WebDAV'ye bağlanır, klasörlerde gezdirir, bir `.mkv` seçtirir ve içine gömülü
-altyazıları (ASS / SSA / SRT) **SRT'ye çevirip** telefondaki **X video player/subtitle** klasörüne kaydeder
+altyazıları (ASS / SSA / SRT) **SRT'ye çevirip** telefondaki **X Video Player** klasörüne kaydeder
 (ASS/SSA altyazılar anında SRT'ye dönüştürülür; stil/efekt etiketleri atılır, italik/kalın/altçizgi korunur).
 İlk açılışta "tüm dosyalara erişim" izni istenir; verilmezse **İndirilenler/Altyazi**'ya kaydeder.
 Dosyayı telefona indirmez; akış olarak okur ve yalnızca altyazı bloklarını tutar.
