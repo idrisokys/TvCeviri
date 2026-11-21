@@ -233,6 +233,18 @@ class MainActivity : Activity() {
         bar2.addView(selAll, LinearLayout.LayoutParams(0, WRAP, 1f))
         bar2.addView(go, LinearLayout.LayoutParams(0, WRAP, 1f))
 
+        // Ayrı bölüm: TorBox indirmelerini temizle
+        val bar3 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(8), 0, dp(8), 0)
+        }
+        val wipe = Button(this).apply {
+            text = "🗑 TorBox indirmelerini temizle"
+            textSize = 12f
+            setOnClickListener { startActivity(Intent(this@MainActivity, TorBoxTemizleActivity::class.java)) }
+        }
+        bar3.addView(wipe, LinearLayout.LayoutParams(0, WRAP, 1f))
+
         val status = TextView(this).apply {
             text = "Yükleniyor…"
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -242,6 +254,7 @@ class MainActivity : Activity() {
         root.addView(pathView, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(bar2, LinearLayout.LayoutParams(MATCH, WRAP))
+        root.addView(bar3, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(status, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(list, LinearLayout.LayoutParams(MATCH, 0, 1f))
         setContentView(root)

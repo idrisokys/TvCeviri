@@ -49,3 +49,9 @@ Dosyayı telefona indirmez; akış olarak okur ve yalnızca altyazı blokların�
 - Altyazı blokları dosya boyunca dağınık olduğundan dosyanın tamamı okunur (diske kaydedilmez
   ama trafik harcar). Mümkünse Wi-Fi kullan.
 - Şifre uygulamanın özel depolamasında düz metin saklanır; "Çıkış" bunu siler.
+
+## TorBox Temizle (ayrı bölüm)
+
+Gezgin ekranındaki **🗑 TorBox indirmelerini temizle** düğmesi ayrı bir ekran açar. TorBox **API anahtarını**
+(TorBox → Settings → API Key) girersin; **İndirmeleri say** torrent / usenet / web indirme sayılarını gösterir,
+**Tüm indirmeleri sil** onaydan sonra hesaptaki hepsini TorBox API'siyle siler (geri alınamaz).
